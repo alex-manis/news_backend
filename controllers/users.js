@@ -1,0 +1,88 @@
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const User = require("../models/user");
+const {
+  BadRequestError,
+  UnauthorizedError,
+  NotFoundError,
+  ConflictError,
+} = require("../utils/errors/errors");
+const { JWT_SECRET } = require("../utils/config");
+
+// GET /users/me
+module.exports.getCurrentUser = (req, res, next) => {
+  const userId = req.user._id;
+
+  return User.findById(userId)
+    .then((user) => {
+      if (!user) {
+        throw new NotFoundError("No user with matching ID found");
+      }
+      return res.send({ data: user });
+    })
+    .catch((err) => {
+      console.error(err);
+      if (err.name === "CastError") {
+        return next(
+          new BadRequestError("The id string is in an invalid format")
+        );
+      }
+      return next(err);
+    });
+};
+
+// POST /signup
+
+module.exports.createUser = (req, res, next) => {
+  const { name, email, password } = req.body;
+
+  bcrypt
+    .hash(password, 10)
+    .then((hash) =>
+      User.create({
+        name,
+        email,
+        password: hash,
+      })
+    )
+    .then((user) => {
+      const userWithoutPassword = user.toObject();
+      delete userWithoutPassword.password;
+      res.status(201).send({ data: userWithoutPassword });
+    })
+    .catch((err) => {
+      console.error(err);
+      if (err.code === 11000) {
+        return next(new ConflictError("User with this email already exists"));
+      }
+      if (err.name === "ValidationError") {
+        return next(new BadRequestError("Create user validation error"));
+      }
+      return next(err);
+    });
+};
+
+// POST /signin
+module.exports.login = (req, res, next) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return next(new BadRequestError("Email and password are required"));
+  }
+
+  return User.findUserByCredentials(email, password)
+    .then((user) => {
+      const token = jwt.sign({ _id: user._id }, JWT_SECRET, {
+        expiresIn: "7d",
+      });
+
+      res.send({ token });
+    })
+    .catch((err) => {
+      console.error(err);
+      if (err.message === "Incorrect email or password") {
+        return next(new UnauthorizedError("Incorrect email or password"));
+      }
+      return next(err);
+    });
+};
